@@ -9,6 +9,7 @@ Usage
 -----
 
 ::
+
     mint2gcode.py /dev/ttyS0
 
 The example assumes the Denford is connected to your first serial port. This will then print a /dev/pts/ you can
@@ -28,4 +29,5 @@ Source
 You can get the latest version via:
 
 ::
+
     git clone https://Zi.iS/c/gcode2mint
