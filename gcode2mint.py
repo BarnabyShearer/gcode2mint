@@ -1,11 +1,4 @@
 #! /usr/bin/env python
-"""
-Acts as a virtual serial port, translating g-code to MINT for the
-Denford MicroMill 2000.
-"""
-__copyright__ = "Copyright 2012, b@Zi.iS"
-__license__ = "GPLv2"
-
 import os
 import select
 import re
@@ -13,11 +6,15 @@ import time
 import sys
 import serial
 
+feed_speed_multiplier = 3.5
+feed_counts_multiplier = 317
+
 def main():
+
     gcode = GCode(MintPrinter(sys.argv[1], 19200, timeout=.1))
 
     input, slave = os.openpty()
-    print "Send G-Code to:%s at 115200" % os.ttyname(slave)
+    print "Send G-Code to:", os.ttyname(slave)
 
     line = ''
     while True:
@@ -77,9 +74,14 @@ class GCode:
 
     metric = True
     absolute = True
+    #Machine coords
     x = 0.0 #Assume at home
     y = 0.0
     z = 0.0
+    #Working coords
+    off_x = 0.0
+    off_y = 0.0
+    off_z = 0.0
 
     def __init__(self, printer):
         self.printer = printer
@@ -111,17 +113,17 @@ class GCode:
             self.printer.feed(self._units(f))
         if x!=None:
             if self.absolute:
-                self.x = self._units(x)
+                self.x = self._units(x) + self.off_x
             else:
                  self.x += self._units(x)
         if y!=None:
             if self.absolute:
-                self.y = self._units(y)
+                self.y = self._units(y) + self.off_y
             else:
                  self.y += self._units(y)
         if z!=None:
             if self.absolute:
-                self.z = self._units(z)
+                self.z = self._units(z) + self.off_z
             else:
                  self.z += self._units(z)
         self.printer.move(
@@ -146,25 +148,31 @@ class GCode:
     def g28(self, x=None, y=None, z=None):
         "Home"
         if x!= None:
-            x = 0
+            x = 0.0
         if y!= None:
-            y = 0
+            y = 0.0
         if z!= None:
-            z = 0
+            z = 0.0
         if x==None and y==None and z==None:
-            x = 0
-            y = 0
-            z = 0
+            x = 0.0
+            y = 0.0
+            z = 0.0
     
         self.g90() #Absolute
         self.g21() #Metric
-        self.g0(x, y, z, f=210) #Fast feed to home
+        self.off_x = 0.0
+        self.off_y = 0.0
+        self.off_z = 0.0
+        self.x = 0.0
+        self.y = 0.0
+        self.z = 0.0
+        #self.g0(x, y, z, f=2000) #Fast feed to home
+        if z!=None:
+            self.printer.home_z()
         if x!=None:
             self.printer.home_x()
         if y!=None:
             self.printer.home_y()
-        if z!=None:
-            self.printer.home_z()
 
     def g40(self):
         "disable tool radius compensation"
@@ -202,15 +210,15 @@ class GCode:
     def g92(self, x=None, y=None, z=None, e=None):
         "Set Position"
         if x != None:
-            self.x = x
+            self.off_x = self.x
         if y != None:
-            self.y = y
+            self.off_y = self.y
         if z != None:
-            self.z = z
+            self.off_z = self.z
         if x == None and y == None and z == None:
-            self.x = 0
-            self.y = 0
-            self.z = 0
+            self.off_x = self.x
+            self.off_y = self.y
+            self.off_z = self.z
 
     def m0(self):
         "Stop"
@@ -248,6 +256,10 @@ class GCode:
         "Set Debug Level"
         pass
     
+    def m112(self):
+        "Emergency Stop"
+        #TODO
+
     def m114(self):
         "Get Current Position"
         return "C: X:%f Y:%f Z:%f E:0.00" % (self._ununits(self.x), self._ununits(self.y), self._ununits(self.z))
@@ -269,6 +281,8 @@ def _checksum(buf):
     return chr(reduce(lambda x,y: x ^ y, [ord(l) for l in buf]))
 
 class MintPrinter(serial.Serial):
+
+    cmds = 0
     
     def _readall(self):
         buf = ''
@@ -278,6 +292,7 @@ class MintPrinter(serial.Serial):
                 break
             buf += b
         msgs = ''
+	print ">", buf
         for x in buf.split('\x02'):
             if '\x03' in x:
                 msg = x[:x.find('\x03')+1]
@@ -288,6 +303,7 @@ class MintPrinter(serial.Serial):
         return msgs
 
     def _send_read(self, cmd, cmd_no=''):
+	print cmd, cmd_no
         self.write("\x04%s%s\x05" % (cmd, cmd_no))
         return self._readall()
 
@@ -296,12 +312,17 @@ class MintPrinter(serial.Serial):
 
     def _send(self, cmd, cmd_no=''):
         buf = "\x04%s%s\x03" % (cmd, cmd_no)
-        print buf + _checksum(buf)
+        print cmd, cmd_no
         self.write(buf + _checksum(buf))
 
     def _wait(self):
-        while self._send_read('ZZ6')[0] != 'z':
-            time.sleep(1)
+	buf = self._send_read('ZZ6')
+        try:
+	    while buf[1] != 'z' or buf.split(",")[3] != '1' or buf.split(",")[4] != '1' or buf.split(",")[5] != '1':
+                time.sleep(.1)
+                buf = self._send_read('ZZ6')
+        except:
+            self._wait()
 
     def get_version(self):
         return "%s.%s.%s" % (
@@ -316,7 +337,7 @@ class MintPrinter(serial.Serial):
 
     def feed(self, value):
         print "SET FEED: %d" % value
-        self._send('MB6', '(03,%04d' % value)
+        self._send('MB6', '(03,%04d' % (value*feed_speed_multiplier))
 
     def read_panel(self):
         return self._send_read('ZZ6')
@@ -451,21 +472,23 @@ class MintPrinter(serial.Serial):
         self._wait()
 
     def move(self, x, y, z):
+        #TODO: ??? 3,4 
         print "MOVING TO: %d %d %d" % (x, y, z)
-        self._send('VA6', '5-%05d,-%05d,-%05d' % (x*254, y*254, -z*254))
+        self._send('VA6', '5-%05d,-%05d,-%05d' % (x*feed_counts_multiplier, y*feed_counts_multiplier, -z*feed_counts_multiplier))
 
     def spindle_on(self):
         print "SPINDLE ON"
+	self._wait()
         self._send('MB6', '%18,3')
         self._send('MB6', '&01,18')
+	self._wait()
 
     def spindle_off(self):
         print "SPINDLE OFF"
+	self._wait()
         self._send('MB6', '%18,5')
         self._send('MB6', '&01,18')
+	self._wait()
 
 if __name__ == "__main__":
-    if len(sys.argv) == 2:
-        main()
-    else:
-        print "Usage: gcode2mint.py [serial port of mill]"
+    main()
