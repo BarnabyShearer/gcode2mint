@@ -135,6 +135,9 @@ class GCode:
 
     def g4(self, p=None):
         """Dwell"""
+        self.printer.wait()
+        if not p > 0:
+            p = 0
         time.sleep(p/1000)
     
     def g20(self):
@@ -210,11 +213,11 @@ class GCode:
     def g92(self, x=None, y=None, z=None, e=None):
         "Set Position"
         if x != None:
-            self.off_x = self.x
+            self.off_x = self.x - x
         if y != None:
-            self.off_y = self.y
+            self.off_y = self.y - y
         if z != None:
-            self.off_z = self.z
+            self.off_z = self.z - z
         if x == None and y == None and z == None:
             self.off_x = self.x
             self.off_y = self.y
@@ -267,11 +270,12 @@ class GCode:
     def m115(self):
         "Get Firmware Version and Capabilities"
         return "PROTOCOL_VERSION:0.1 FIRMWARE_NAME:gcode2mint MACHINE_TYPE:%s EXTRUDER_COUNT:0" % (
-            self.printer.get_version()        )
+            self.printer.get_version()
+	)
     
     def m116(self):
         "Wait"
-        pass
+        self.printer.wait()
 
     def t1(self):
         "Select Tool"
@@ -323,6 +327,9 @@ class MintPrinter(serial.Serial):
                 buf = self._send_read('ZZ6')
         except:
             self._wait()
+
+    def wait(self):
+	self._wait();
 
     def get_version(self):
         return "%s.%s.%s" % (
